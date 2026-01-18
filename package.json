@@ -1,5 +1,5 @@
 {
-  "name": "shotapi",
+  "name": "@shotapi/sdk",
   "version": "1.0.0",
   "description": "Official Node.js SDK for ShotAPI - Screenshot API for Developers",
   "main": "dist/index.js",

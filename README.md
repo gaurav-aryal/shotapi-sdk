@@ -5,13 +5,13 @@ Official Node.js SDK for [ShotAPI](https://shotapi.dev) - Screenshot API for Dev
 ## Installation
 
 ```bash
-npm install shotapi
+npm install @shotapi/sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import ShotAPI from 'shotapi';
+import ShotAPI from '@shotapi/sdk';
 
 const client = new ShotAPI({ apiKey: 'your-api-key' });
 
@@ -192,7 +192,7 @@ const client = new ShotAPI({
 ## Error Handling
 
 ```typescript
-import ShotAPI, { ShotAPIException } from 'shotapi';
+import ShotAPI, { ShotAPIException } from '@shotapi/sdk';
 
 try {
   const result = await client.screenshot({
@@ -218,7 +218,7 @@ import ShotAPI, {
   DevicePreset,
   ImageFormat,
   ShotAPIConfig
-} from 'shotapi';
+} from '@shotapi/sdk';
 ```
 
 ## Response Format
