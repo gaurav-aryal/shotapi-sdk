@@ -1,6 +1,6 @@
 {
   "name": "@shotapi/sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Official Node.js SDK for ShotAPI - Screenshot API for Developers",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

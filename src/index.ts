@@ -4,7 +4,7 @@ import {
   ShotAPIConfig,
   ShotAPIError,
   DevicePreset,
-  ImageFormat,
+  DevicePresetConfig,
 } from './types';
 
 export * from './types';
@@ -29,7 +29,7 @@ export class ShotAPIException extends Error {
 /**
  * Device presets with their viewport dimensions
  */
-const DEVICE_PRESETS: Record<DevicePreset, { width: number; height: number; mobile: boolean; scale: number }> = {
+const DEVICE_PRESETS: Record<DevicePreset, DevicePresetConfig> = {
   desktop: { width: 1920, height: 1080, mobile: false, scale: 1 },
   laptop: { width: 1366, height: 768, mobile: false, scale: 1 },
   tablet: { width: 768, height: 1024, mobile: true, scale: 2 },
@@ -44,11 +44,23 @@ const DEVICE_PRESETS: Record<DevicePreset, { width: number; height: number; mobi
 };
 
 /**
+ * Validate URL format
+ */
+function isValidUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * ShotAPI - Screenshot API SDK
  *
  * @example
  * ```typescript
- * import ShotAPI from 'shotapi';
+ * import ShotAPI from '@shotapi/sdk';
  *
  * const client = new ShotAPI({ apiKey: 'your-api-key' });
  *
@@ -70,16 +82,18 @@ export class ShotAPI {
   private readonly baseUrl: string;
   private readonly timeout: number;
   private readonly retries: number;
+  private readonly maxConcurrent: number;
 
   constructor(config: ShotAPIConfig) {
     if (!config.apiKey) {
-      throw new ShotAPIException('API key is required');
+      throw new ShotAPIException('API key is required', 'MISSING_API_KEY');
     }
 
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl || 'https://shotapi.dev';
     this.timeout = config.timeout || 30000;
     this.retries = config.retries ?? 2;
+    this.maxConcurrent = config.maxConcurrent ?? 5;
   }
 
   /**
@@ -99,8 +113,36 @@ export class ShotAPI {
    * ```
    */
   async screenshot(options: ScreenshotOptions): Promise<ScreenshotResponse> {
+    // Validate URL
     if (!options.url) {
-      throw new ShotAPIException('URL is required');
+      throw new ShotAPIException('URL is required', 'MISSING_URL');
+    }
+
+    if (!isValidUrl(options.url)) {
+      throw new ShotAPIException(
+        `Invalid URL: ${options.url}. URL must start with http:// or https://`,
+        'INVALID_URL'
+      );
+    }
+
+    // Validate quality if provided
+    if (options.quality !== undefined) {
+      if (options.quality < 1 || options.quality > 100) {
+        throw new ShotAPIException(
+          'Quality must be between 1 and 100',
+          'INVALID_QUALITY'
+        );
+      }
+    }
+
+    // Validate delay if provided
+    if (options.delay !== undefined) {
+      if (options.delay < 0 || options.delay > 10000) {
+        throw new ShotAPIException(
+          'Delay must be between 0 and 10000 milliseconds',
+          'INVALID_DELAY'
+        );
+      }
     }
 
     const params = this.buildParams(options);
@@ -115,14 +157,7 @@ export class ShotAPI {
    */
   async screenshotBuffer(options: ScreenshotOptions): Promise<Buffer> {
     const response = await this.screenshot(options);
-    const imageResponse = await fetch(response.url);
-
-    if (!imageResponse.ok) {
-      throw new ShotAPIException('Failed to fetch screenshot image');
-    }
-
-    const arrayBuffer = await imageResponse.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return this.fetchBuffer(response.url);
   }
 
   /**
@@ -137,26 +172,55 @@ export class ShotAPI {
 
     // Dynamic import for Node.js fs module
     const fs = await import('fs/promises');
+    const path = await import('path');
+
+    // Ensure directory exists
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+
     await fs.writeFile(filePath, buffer);
 
     return response;
   }
 
   /**
-   * Capture multiple screenshots in batch
+   * Capture multiple screenshots in batch with rate limiting
    *
    * @param urls - Array of URLs to capture
    * @param options - Common options for all screenshots
    * @returns Array of screenshot responses
+   *
+   * @example
+   * ```typescript
+   * const results = await client.batch([
+   *   'https://example.com',
+   *   'https://google.com',
+   *   'https://github.com'
+   * ], { width: 1280 });
+   * ```
    */
   async batch(
     urls: string[],
     options?: Omit<ScreenshotOptions, 'url'>
   ): Promise<ScreenshotResponse[]> {
-    const promises = urls.map((url) =>
-      this.screenshot({ ...options, url })
-    );
-    return Promise.all(promises);
+    const results: ScreenshotResponse[] = [];
+
+    // Process in chunks to respect rate limits
+    for (let i = 0; i < urls.length; i += this.maxConcurrent) {
+      const chunk = urls.slice(i, i + this.maxConcurrent);
+      const promises = chunk.map((url) =>
+        this.screenshot({ ...options, url })
+      );
+      const chunkResults = await Promise.all(promises);
+      results.push(...chunkResults);
+
+      // Small delay between chunks to avoid rate limiting
+      if (i + this.maxConcurrent < urls.length) {
+        await this.sleep(100);
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -165,7 +229,7 @@ export class ShotAPI {
    * @param device - Device preset name
    * @returns Device dimensions
    */
-  static getDevicePreset(device: DevicePreset) {
+  static getDevicePreset(device: DevicePreset): DevicePresetConfig {
     return DEVICE_PRESETS[device];
   }
 
@@ -203,11 +267,11 @@ export class ShotAPI {
     if (options.fullPage) params.set('full_page', 'true');
     if (options.format) params.set('format', options.format);
     if (options.quality) params.set('quality', options.quality.toString());
-    if (options.scale) params.set('scale', options.scale.toString());
+    if (options.scale && !options.device) params.set('scale', options.scale.toString());
     if (options.delay) params.set('delay', options.delay.toString());
     if (options.waitForSelector) params.set('wait_for', options.waitForSelector);
     if (options.darkMode) params.set('dark_mode', 'true');
-    if (options.mobile) params.set('mobile', 'true');
+    if (options.mobile && !options.device) params.set('mobile', 'true');
 
     // Premium options
     if (options.selector) params.set('selector', options.selector);
@@ -225,13 +289,13 @@ export class ShotAPI {
    */
   private async request<T>(endpoint: string, params: URLSearchParams): Promise<T> {
     const url = `${this.baseUrl}${endpoint}?${params.toString()}`;
-    let lastError: Error | null = null;
+    let lastError: ShotAPIException | null = null;
 
     for (let attempt = 0; attempt <= this.retries; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
+      try {
         const response = await fetch(url, {
           method: 'GET',
           signal: controller.signal,
@@ -239,25 +303,60 @@ export class ShotAPI {
 
         clearTimeout(timeoutId);
 
-        const data = await response.json();
-
+        // Check response status before parsing JSON
         if (!response.ok) {
-          const error = data as ShotAPIError;
-          throw new ShotAPIException(
-            error.error || 'Unknown error',
-            error.code,
-            error.details,
+          let errorData: ShotAPIError | null = null;
+          try {
+            errorData = await response.json() as ShotAPIError;
+          } catch {
+            // JSON parsing failed, use generic error
+          }
+
+          const error = new ShotAPIException(
+            errorData?.error || `HTTP ${response.status}: ${response.statusText}`,
+            errorData?.code || 'HTTP_ERROR',
+            errorData?.details,
             response.status
           );
+
+          // Don't retry on client errors (4xx)
+          if (response.status >= 400 && response.status < 500) {
+            throw error;
+          }
+
+          lastError = error;
+
+          // Wait before retry (exponential backoff)
+          if (attempt < this.retries) {
+            await this.sleep(Math.pow(2, attempt) * 1000);
+          }
+          continue;
         }
 
+        const data = await response.json();
         return data as T;
-      } catch (error) {
-        lastError = error as Error;
+      } catch (error: unknown) {
+        clearTimeout(timeoutId);
 
-        // Don't retry on client errors (4xx)
-        if (error instanceof ShotAPIException && error.statusCode && error.statusCode < 500) {
+        // Re-throw ShotAPIException directly
+        if (error instanceof ShotAPIException) {
           throw error;
+        }
+
+        // Handle abort/timeout
+        if (error instanceof Error && error.name === 'AbortError') {
+          lastError = new ShotAPIException(
+            `Request timeout after ${this.timeout}ms`,
+            'TIMEOUT'
+          );
+        } else if (error instanceof Error) {
+          // Network or other error
+          lastError = new ShotAPIException(
+            error.message || 'Network error',
+            'NETWORK_ERROR'
+          );
+        } else {
+          lastError = new ShotAPIException('Unknown error occurred', 'UNKNOWN_ERROR');
         }
 
         // Wait before retry (exponential backoff)
@@ -267,7 +366,7 @@ export class ShotAPI {
       }
     }
 
-    throw lastError || new ShotAPIException('Request failed after retries');
+    throw lastError || new ShotAPIException('Request failed after retries', 'MAX_RETRIES');
   }
 
   /**
@@ -276,7 +375,12 @@ export class ShotAPI {
   private async fetchBuffer(url: string): Promise<Buffer> {
     const response = await fetch(url);
     if (!response.ok) {
-      throw new ShotAPIException('Failed to fetch image');
+      throw new ShotAPIException(
+        `Failed to fetch image: HTTP ${response.status}`,
+        'IMAGE_FETCH_ERROR',
+        undefined,
+        response.status
+      );
     }
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);

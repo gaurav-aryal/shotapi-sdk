@@ -187,4 +187,19 @@ export interface ShotAPIConfig {
    * Number of retry attempts on failure (default: 2)
    */
   retries?: number;
+
+  /**
+   * Maximum concurrent requests for batch operations (default: 5)
+   */
+  maxConcurrent?: number;
+}
+
+/**
+ * Device preset dimensions
+ */
+export interface DevicePresetConfig {
+  width: number;
+  height: number;
+  mobile: boolean;
+  scale: number;
 }
